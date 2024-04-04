@@ -103,6 +103,30 @@ impl MatchingEngine {
         self.orderbooks.get_mut(token_ticker)
     }
 
+    /// Matches buy and sell orders from all order books.
+    ///
+    /// This function iterates over all order books, compares buy and sell prices, and matches them based on price-time priority.
+    /// It returns a vector of matched trades, each represented as a tuple containing the IDs of the buy and sell orders,
+    /// the price at which the sell order was executed, and the quantity traded.
+    ///
+    /// # Returns
+    ///
+    /// A vector of tuples representing matched trades, where each tuple contains:
+    ///
+    /// 1. The ID of the buy order.
+    /// 2. The ID of the sell order.
+    /// 3. The price at which the sell order was executed.
+    /// 4. The quantity traded.
+    ///
+    /// # Example
+    ///
+    /// ```
+    ///
+    /// # fn main() {
+    /// #    let mut engine = MatchingEngine::new();
+    /// #    // Add orders to the engine
+    /// #    let _ = engine.match_orders();
+    /// # }
     pub fn match_orders(&mut self) -> Vec<(u64, u64, f64, u32)> {
         let mut matched_trades = Vec::new();
         for (_, orderbook) in self.orderbooks.iter_mut() {
@@ -195,6 +219,39 @@ impl AMMPool {
         *self.base_reserve.entry(token.clone()).or_insert(0) += amount;
     }
 
+    pub fn add_liquidity_pair(
+        &mut self,
+        token_a: TokenTicker,
+        amount_a: u64,
+        token_b: TokenTicker,
+        amount_b: u64,
+        target_ratio: f64,
+        tolerance: f64,
+    ) -> u64 {
+        // Calculate the ratio of the amounts being added
+        let actual_ratio = amount_a as f64 / amount_b as f64;
+
+        // Check if the actual ratio matches the target ratio within the specified tolerance
+        if (actual_ratio - target_ratio).abs() <= tolerance {
+            // Add liquidity for both tokens
+            self.add_liquidity(token_a.clone(), amount_a);
+            self.add_liquidity(token_b.clone(), amount_b);
+
+            // Calculate LP tokens to mint based on the shares of the new pair
+            let total_liquidity = self.token_reserves.values().sum::<u64>() as f64;
+            let share_a = amount_a as f64 / total_liquidity;
+            let share_b = amount_b as f64 / total_liquidity;
+
+            // Mint and return LP tokens to the user based on the proportion of liquidity provided
+            let lp_tokens = (share_a * total_liquidity) as u64;
+            lp_tokens
+        } else {
+            // Reject the operation if the ratio doesn't match within tolerance
+            println!("Error: Actual ratio does not match the target ratio within the specified tolerance.");
+            0 // Return 0 LP tokens
+        }
+    }
+
     pub fn swap(&mut self, token_out: TokenTicker, amount_in: u64) -> Option<u64> {
         // Let's assume a constant product model (e.g., Uniswap) for AMM swaps
         let new_token_reserve =
@@ -234,6 +291,30 @@ impl AMMPool {
         Some(amount_out)
     }
 
+    /// Performs a multi-token swap between two tokens in the AMM pool.
+    ///
+    /// This function calculates the optimal path for the swap by finding the token pair with the highest output amount based on the constant product formula.
+    /// It then iterates through the optimal path, swapping one token for another, and updates the reserves accordingly.
+    ///
+    /// # Arguments
+    ///
+    /// * `token_in` - The token to swap from.
+    /// * `token_out` - The token to swap to.
+    /// * `amount_in` - The amount of the input token to swap.
+    ///
+    /// # Returns
+    ///
+    /// The amount of the output token received after the swap, if successful. Returns `None` if the swap cannot be performed or the optimal path is not found.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # fn main() {
+    /// #    let mut pool = AMMPool::new();
+    /// #    pool.add_liquidity(TokenTicker::ETH, 1000);
+    /// #    pool.add_liquidity(TokenTicker::USDT, 5000);
+    /// #    let _ = pool.multi_token_swap(TokenTicker::ETH, TokenTicker::USDT, 100);
+    /// # }
     pub fn multi_token_swap(
         &mut self,
         token_in: TokenTicker,
@@ -344,7 +425,7 @@ mod test {
         // Test listing of tokens
         let mut engine_1 = MatchingEngine::new();
         let new_token = Token::new(
-            TokenTicker::BTC(String::from("Bitcoin")),
+            TokenTicker::BTC,
             Category::Infatrusture,
             Market::OtherMarket(CryptoExchange::Binance),
         );
@@ -488,30 +569,31 @@ mod test {
     }
 
     #[test]
-    fn test_add_liquidity() {
-        let mut amm_pool = AMMPool::new();
-        amm_pool.add_liquidity(TokenTicker::BTC, 100);
-        amm_pool.add_liquidity(TokenTicker::ETH, 200);
+    fn test_add_liquidity_pair() {
+        let mut pool = AMMPool::new();
 
-        assert_eq!(amm_pool.token_reserves.get(&TokenTicker::BTC), Some(&100));
-        assert_eq!(amm_pool.token_reserves.get(&TokenTicker::ETH), Some(&200));
-        assert_eq!(amm_pool.base_reserve.get(&TokenTicker::BTC), Some(&100));
-        assert_eq!(amm_pool.base_reserve.get(&TokenTicker::ETH), Some(&200));
+        // Add liquidity pair with matching ratio
+        let lp_tokens =
+            pool.add_liquidity_pair(TokenTicker::ETH, 1000, TokenTicker::USDT, 5000, 2.0, 0.1);
+        assert_eq!(lp_tokens, 10); // Assuming total liquidity is 10000 and each token contributes equally
+
+        // Add liquidity pair with mismatched ratio (should fail)
+        let lp_tokens_fail =
+            pool.add_liquidity_pair(TokenTicker::ETH, 1000, TokenTicker::USDT, 4000, 2.0, 0.1);
+        assert_eq!(lp_tokens_fail, 0); // Should return 0 LP tokens due to ratio mismatch
     }
 
     #[test]
     fn test_swap() {
-        use super::*;
-        let mut amm_pool = AMMPool::new();
-        amm_pool.add_liquidity(TokenTicker::BTC, 100);
-        amm_pool.add_liquidity(TokenTicker::ETH, 200);
+        let mut pool = AMMPool::new();
+        pool.add_liquidity_pair(TokenTicker::ETH, 1000, TokenTicker::USDT, 5000, 2.0, 0.1);
 
-        let amount_out = amm_pool.swap(TokenTicker::BTC, 50).unwrap();
+        // Swap ETH for USDT
+        let amount_out = pool.multi_token_swap(TokenTicker::ETH, TokenTicker::USDT, 100);
+        assert_eq!(amount_out, Some(200)); // Assuming a constant product model with 1:2 ratio
 
-        assert_eq!(amount_out, 100);
-        assert_eq!(amm_pool.token_reserves.get(&TokenTicker::BTC), Some(&50));
-        assert_eq!(amm_pool.token_reserves.get(&TokenTicker::ETH), Some(&200));
-        assert_eq!(amm_pool.base_reserve.get(&TokenTicker::BTC), Some(&50));
-        assert_eq!(amm_pool.base_reserve.get(&TokenTicker::ETH), Some(&200));
+        // Swap USDT for ETH
+        let amount_out = pool.multi_token_swap(TokenTicker::USDT, TokenTicker::ETH, 1000);
+        assert_eq!(amount_out, Some(50)); // Assuming a constant product model with 1:2 ratio
     }
 }
