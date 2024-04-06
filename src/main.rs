@@ -1,7 +1,5 @@
-use trading_engine::corelib::
-    engine::MatchingEngine
-;
+use trading_engine::corelib::engine::TradeEngine;
 
 fn main() {
-    let mut matching_engine = MatchingEngine::new();
+    let mut matching_engine = TradeEngine::new();
 }

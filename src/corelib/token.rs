@@ -2,12 +2,15 @@
 pub enum Market {
     AfricaMarket(AfricaExchange),
     OtherMarket(CryptoExchange),
+    USMarket(USExchange),
 }
 #[derive(Hash, PartialEq, Eq, Clone)]
 pub enum AfricaExchange {
     NajaEx,
     MorrockEx,
     WariEx,
+    GCoin,
+    XMGCoin,
 }
 
 #[derive(Hash, PartialEq, Eq, Clone)]
@@ -18,6 +21,11 @@ pub enum CryptoExchange {
     ByBit,
     CoinDCX,
     Binance,
+}
+
+#[derive(Hash, PartialEq, Eq, Clone)]
+pub enum USExchange {
+    BinanceUS,
     Coinbase,
     Kraken,
 }
@@ -39,6 +47,7 @@ pub enum TokenTicker {
     BTC,
     ETH,
     USDT,
+    XUSD,
     SOL,
     BNB,
     XRP,
@@ -53,8 +62,21 @@ pub enum TokenTicker {
     ICP,
     LTC,
     UNI,
+    FIL,
+    ROOT,
 }
 
+#[derive(Hash, PartialEq, Eq, Clone)]
+pub struct Pair {
+    pub ticker_a: TokenTicker,
+    pub ticker_b: TokenTicker,
+}
+
+impl Pair {
+    pub fn new(ticker_a: TokenTicker, ticker_b: TokenTicker) -> Pair {
+        Pair { ticker_a, ticker_b }
+    }
+}
 #[derive(Hash, PartialEq, Eq, Clone)]
 pub struct Token {
     pub ticker: TokenTicker,

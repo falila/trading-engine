@@ -3,6 +3,15 @@ pub enum BuyOrSell {
     Buy,
     Sell,
 }
+#[derive(Hash, PartialEq, Eq, Clone, Debug)]
+pub struct Wallet {
+    pub address: String,
+}
+impl Wallet {
+    pub fn new(key: String) -> Wallet {
+        Wallet { address: key }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Order {
@@ -10,6 +19,7 @@ pub struct Order {
     pub price: f64,
     pub id: u64,
     pub timestamp: u64,
+    pub wallet: Option<Wallet>,
 }
 
 impl Order {
@@ -19,6 +29,7 @@ impl Order {
             price: price,
             id: id,
             timestamp: time,
+            wallet: None,
         }
     }
 }

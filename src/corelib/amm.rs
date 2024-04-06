@@ -1,28 +1,30 @@
+use crate::corelib::order::Wallet;
 use std::collections::{HashMap, HashSet};
 
-use super::token::TokenTicker;
+use super::token::{Pair, TokenTicker};
 
 pub struct AMMPool {
-    token_reserves: HashMap<TokenTicker, u64>,
-    base_reserve: HashMap<TokenTicker, u64>,
-    lp_providers: HashSet<u64>,
+    liquidity_pools: HashMap<TokenTicker, u64>,
+    total_lp_per_pair: HashMap<Pair, u64>,
+    account_lp_tokens: HashMap<Wallet, HashMap<Pair, u64>>,
 }
 
 impl AMMPool {
     pub fn new() -> AMMPool {
         AMMPool {
-            lp_providers: HashSet::new(),
-            token_reserves: HashMap::new(),
-            base_reserve: HashMap::new(),
+            liquidity_pools: HashMap::new(),
+            account_lp_tokens: HashMap::new(),
+            total_lp_per_pair: HashMap::new(),
         }
     }
 
     pub fn add_liquidity(&mut self, token: TokenTicker, amount: u64) {
-        *self.token_reserves.entry(token).or_insert(0) += amount;
+        *self.liquidity_pools.entry(token).or_insert(0) += amount;
     }
 
     pub fn add_liquidity_pair(
         &mut self,
+        wallet: Wallet,
         token_a: TokenTicker,
         amount_a: u64,
         token_b: TokenTicker,
@@ -40,13 +42,34 @@ impl AMMPool {
             self.add_liquidity(token_b.clone(), amount_b);
 
             // Calculate LP tokens to mint based on the shares of the new pair
-            let total_liquidity = self.token_reserves.values().sum::<u64>() as f64;
-            let share_a = amount_a as f64 / total_liquidity;
-            let share_b = amount_b as f64 / total_liquidity;
+            let total_liquidity_a = *self.liquidity_pools.get(&token_b).unwrap() as f64;
+            let share_a = amount_a as f64 / total_liquidity_a as f64;
+
+            let total_liquidity_b = *self.liquidity_pools.get(&token_b).unwrap() as f64;
+            let share_b = (amount_b as f64 / total_liquidity_b as f64) as f64;
 
             // Mint and return LP tokens to the user based on the proportion of liquidity provided
-            let lp_tokens = (share_a * total_liquidity) as u64;
-            lp_tokens
+            let lp_tokens_a = (share_a * total_liquidity_a) as u64;
+            let lp_tokens_b = (share_b * total_liquidity_b) as u64;
+
+            let pair = Pair {
+                ticker_a: token_a,
+                ticker_b: token_b,
+            };
+            let mut wallet_pairs = self
+                .account_lp_tokens
+                .entry(wallet)
+                .or_insert_with(|| HashMap::new());
+            for p in wallet_pairs.iter_mut() {
+                if *p.0 == pair {
+                    wallet_pairs
+                        .entry(pair)
+                        .and_modify(|qt| *qt += lp_tokens_a + lp_tokens_b);
+                    break;
+                } else {
+                }
+            }
+            lp_tokens_a + lp_tokens_b
         } else {
             // Reject the operation if the ratio doesn't match within tolerance
             println!("Error: Actual ratio does not match the target ratio within the specified tolerance.");
@@ -54,30 +77,6 @@ impl AMMPool {
         }
     }
 
-    /// Performs a multi-token swap between two tokens in the AMM pool.
-    ///
-    /// This function calculates the optimal path for the swap by finding the token pair with the highest output amount based on the constant product formula.
-    /// It then iterates through the optimal path, swapping one token for another, and updates the reserves accordingly.
-    ///
-    /// # Arguments
-    ///
-    /// * `token_in` - The token to swap from.
-    /// * `token_out` - The token to swap to.
-    /// * `amount_in` - The amount of the input token to swap.
-    ///
-    /// # Returns
-    ///
-    /// The amount of the output token received after the swap, if successful. Returns `None` if the swap cannot be performed or the optimal path is not found.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # fn main() {
-    /// #    let mut pool = AMMPool::new();
-    /// #    pool.add_liquidity(TokenTicker::ETH, 1000);
-    /// #    pool.add_liquidity(TokenTicker::USDT, 5000);
-    /// #    let _ = pool.multi_token_swap(TokenTicker::ETH, TokenTicker::USDT, 100);
-    /// # }
     pub fn token_swap(
         &mut self,
         token_in: TokenTicker,
@@ -90,7 +89,7 @@ impl AMMPool {
         let mut optimal_path: Vec<TokenTicker> = Vec::new();
 
         // Iterate over all tokens in the pool
-        for (token, _) in self.token_reserves.iter() {
+        for (token, _) in self.liquidity_pools.iter() {
             if token != &token_in && token != &token_out {
                 // Calculate the output amount for the current path
                 let output_amount =
@@ -141,12 +140,12 @@ impl AMMPool {
         token_b: TokenTicker,
         amount_in: u64,
     ) -> Option<u64> {
-        let reserve_a = *self.token_reserves.get(&token_a)?;
-        let reserve_b = *self.token_reserves.get(&token_b)?;
+        let reserve_a = *self.liquidity_pools.get(&token_a)?;
+        let reserve_b = *self.liquidity_pools.get(&token_b)?;
 
         // a constant product model (e.g., Uniswap) for AMM swaps
         let new_reserve_a = reserve_a + amount_in;
-        let new_reserve_b = *self.base_reserve.get(&token_b)?;
+        let new_reserve_b = reserve_b + amount_in;
 
         let numerator = new_reserve_b * reserve_a;
         let denominator = new_reserve_a;
@@ -162,12 +161,123 @@ impl AMMPool {
         amount_in: u64,
         amount_out: u64,
     ) -> Option<()> {
-        let reserve_a = self.token_reserves.get_mut(&token_a)?;
+        let reserve_a = self.liquidity_pools.get_mut(&token_a)?;
 
         *reserve_a += amount_in;
-        let reserve_b = self.token_reserves.get_mut(&token_b)?;
+        let reserve_b = self.liquidity_pools.get_mut(&token_b)?;
         *reserve_b -= amount_out;
 
         Some(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+
+    use super::*;
+
+    #[test]
+    fn test_add_liquidity() {
+        let mut amm = AMMPool::new();
+        let token_a = TokenTicker::ETH;
+        let token_b = TokenTicker::USDT;
+        let amount_a = 1000;
+        let amount_b = 2000;
+
+        amm.add_liquidity(token_a.clone(), amount_a);
+        amm.add_liquidity(token_b.clone(), amount_b);
+
+        assert_eq!(amm.liquidity_pools.get(&token_a), Some(&1000));
+        assert_eq!(amm.liquidity_pools.get(&token_b), Some(&2000));
+    }
+
+    #[test]
+    fn test_add_liquidity_pair() {
+        let mut amm = AMMPool::new();
+        let wallet = Wallet::new(String::from("walletkeyxzr"));
+        let token_a = TokenTicker::ETH;
+        let amount_a = 1000;
+        let token_b = TokenTicker::USDT;
+        let amount_b = 2000;
+        let target_ratio = 2.0;
+        let tolerance = 0.1; // 10% tolerance
+
+        let lp_tokens = amm.add_liquidity_pair(
+            wallet.clone(),
+            token_a.clone(),
+            amount_a,
+            token_b.clone(),
+            amount_b,
+            target_ratio,
+            tolerance,
+        );
+
+        assert_eq!(lp_tokens, 3000); // Assuming LP tokens minted correctly
+    }
+
+    #[test]
+    fn test_token_swap_insufficient_liquidity() {
+        // Initialize liquidity pools
+        let mut liquidity_pools = HashMap::new();
+        liquidity_pools.insert(TokenTicker::ETH.clone(), 1000); // Lower liquidity
+        liquidity_pools.insert(TokenTicker::USDT.clone(), 4000);
+
+        let mut amm = AMMPool {
+            liquidity_pools,
+            total_lp_per_pair: HashMap::new(),
+            account_lp_tokens: HashMap::new(),
+        };
+
+        let token_in = TokenTicker::ETH;
+        let token_out = TokenTicker::USDT;
+        let amount_in = 2000; // Higher amount than available liquidity
+
+        let amount_out = amm.token_swap(token_in.clone(), token_out.clone(), amount_in);
+
+        assert_eq!(amount_out, None); // Expecting None as liquidity is insufficient
+    }
+
+    #[test]
+    fn test_token_swap_successful() {
+        // Initialize liquidity pools
+        let mut liquidity_pools = HashMap::new();
+        liquidity_pools.insert(TokenTicker::ETH.clone(), 2000);
+        liquidity_pools.insert(TokenTicker::USDT.clone(), 4000);
+
+        let mut amm = AMMPool {
+            liquidity_pools,
+            total_lp_per_pair: HashMap::new(),
+            account_lp_tokens: HashMap::new(),
+        };
+
+        let token_in = TokenTicker::ETH;
+        let token_out = TokenTicker::USDT;
+        let amount_in = 1000;
+
+        let amount_out = amm.token_swap(token_in.clone(), token_out.clone(), amount_in);
+
+        assert_eq!(amount_out, Some(2000)); // Assuming swap successful
+    }
+
+    #[test]
+    fn test_token_swap_zero_amount() {
+        // Initialize liquidity pools
+        let mut liquidity_pools = HashMap::new();
+        liquidity_pools.insert(TokenTicker::ETH.clone(), 2000);
+        liquidity_pools.insert(TokenTicker::USDT.clone(), 4000);
+
+        let mut amm = AMMPool {
+            liquidity_pools,
+            total_lp_per_pair: HashMap::new(),
+            account_lp_tokens: HashMap::new(),
+        };
+
+        let token_in = TokenTicker::ETH;
+        let token_out = TokenTicker::USDT;
+        let amount_in = 0; // Zero input amount
+
+        let amount_out = amm.token_swap(token_in.clone(), token_out.clone(), amount_in);
+
+        assert_eq!(amount_out, Some(0)); // Expecting zero output amount for zero input amount
     }
 }
