@@ -1,4 +1,4 @@
-# AMM (Automated Market Maker) and Order Book Trading Engine
+# AMM (Automated Market Maker) Simulator and Order Book Trading Engine
 
 A Simple AMM and Order Book Trading Engine in Rust. It provides functionalities for liquidity provision, token swaps, and order matching for trading various tokens.
 
